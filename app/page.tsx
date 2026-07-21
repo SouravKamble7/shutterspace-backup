@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 const photos = [
   { src: "https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=900&q=85", author: "Maya Wilson", avatar: "MW", title: "The road less travelled", likes: "2.4k", ratio: "tall", tag: "Travel" },
@@ -30,11 +31,52 @@ export default function Home() {
   const [liked, setLiked] = useState<number[]>([]);
   const [category, setCategory] = useState("All photos");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [uploaded, setUploaded] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const visible = category === "All photos" ? photos : photos.filter((p) => p.tag === category);
   const pickFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) setSelectedFile(URL.createObjectURL(file));
+    if (!file) return;
+    setFile(file);
+    setSelectedFile(URL.createObjectURL(file));
+    setUploaded(false);
+    setUploadError("");
+  };
+  const clearFile = () => { setFile(null); setSelectedFile(null); setUploaded(false); setUploadError(""); };
+  const uploadPhoto = async () => {
+    if (!file) { setUploadError("Choose a photo before uploading."); return; }
+    if (!title.trim()) { setUploadError("Add a title for your photo."); return; }
+
+    setUploading(true);
+    setUploadError("");
+    setUploaded(false);
+    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const path = `uploads/${crypto.randomUUID()}.${extension}`;
+    const { error: storageError } = await supabase.storage.from("photos").upload(path, file, {
+      cacheControl: "3600", contentType: file.type, upsert: false,
+    });
+    if (storageError) { setUploadError(`Upload failed: ${storageError.message}`); setUploading(false); return; }
+
+    const { data: publicUrlData } = supabase.storage.from("photos").getPublicUrl(path);
+    const { error: databaseError } = await supabase.from("photos").insert({
+      title: title.trim(), description: description.trim() || null, image_url: publicUrlData.publicUrl,
+    });
+    if (databaseError) {
+      await supabase.storage.from("photos").remove([path]);
+      setUploadError(`Photo saved to Storage but could not be added to the gallery: ${databaseError.message}`);
+      setUploading(false);
+      return;
+    }
+    setUploaded(true);
+    setUploading(false);
+    setFile(null);
+    setSelectedFile(null);
+    setTitle("");
+    setDescription("");
   };
 
   return <main className={dark ? "site dark" : "site"}>
@@ -69,7 +111,7 @@ export default function Home() {
       <button className="load-more">Load more photos <Icon name="arrow" size={17}/></button></div></section>
 
     <section id="upload" className="upload-section wrap"><div className="upload-copy"><span className="kicker">YOUR TURN</span><h2>Share what you<br/><em>see.</em></h2><p>Every image has a story waiting to be told. Let yours be the next one someone discovers.</p><div className="upload-stat"><span><Icon name="spark" size={20}/></span><p><b>Get discovered</b><small>Connect with a global community that cares about your work.</small></p></div></div>
-      <div className="upload-card"><div className="upload-card-head"><span>Upload a photo</span><small>JPG, PNG or WEBP · Max 10MB</small></div>{selectedFile ? <div className="preview"><img src={selectedFile} alt="Selected upload preview"/><button onClick={() => setSelectedFile(null)}>Remove</button></div> : <label className="dropzone"><input type="file" accept="image/*" onChange={pickFile}/><span className="upload-icon"><Icon name="upload" size={22}/></span><b>Drop your photo here</b><small>or <u>browse from your computer</u></small></label>}<div className="upload-fields"><input placeholder="Give your photo a title"/><div><input placeholder="Add a short description"/><button onClick={() => setUploaded(true)} className="send-button" aria-label="Upload photo"><Icon name="arrow" size={18}/></button></div></div>{uploaded && <p className="success">✓ Your photo is ready to share!</p>}</div>
+      <div className="upload-card"><div className="upload-card-head"><span>Upload a photo</span><small>JPG, PNG or WEBP · Max 10MB</small></div>{selectedFile ? <div className="preview"><img src={selectedFile} alt="Selected upload preview"/><button type="button" onClick={clearFile}>Remove</button></div> : <label className="dropzone"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={pickFile}/><span className="upload-icon"><Icon name="upload" size={22}/></span><b>Drop your photo here</b><small>or <u>browse from your computer</u></small></label>}<div className="upload-fields"><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Give your photo a title"/><div><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add a short description"/><button type="button" onClick={uploadPhoto} disabled={uploading} className="send-button" aria-label="Upload photo">{uploading ? "…" : <Icon name="arrow" size={18}/>}</button></div></div>{uploaded && <p className="success">✓ Your photo was uploaded successfully!</p>}{uploadError && <p className="upload-error" role="alert">{uploadError}</p>}</div>
     </section>
 
     <section id="about" className="stats wrap"><div><strong>48k<span>+</span></strong><p>Photos shared</p></div><div><strong>12k<span>+</span></strong><p>Creative minds</p></div><div><strong>2.4m<span>+</span></strong><p>Moments inspired</p></div><div><strong>92<span>%</span></strong><p>Feel more creative</p></div></section>
